@@ -1,0 +1,8 @@
+- job:
+    name: postfix-deployment
+    description: 'Pipeline for building and deploying Postfix application'
+    project-type: pipeline
+    pipeline-scm:
+      scm:
+        - git:
+            

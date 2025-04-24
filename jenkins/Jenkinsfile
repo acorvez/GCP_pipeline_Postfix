@@ -1,0 +1,188 @@
+pipeline {
+    agent any
+    
+    environment {
+        GITLAB_CREDS = credentials('gitlab-credentials')
+        DOCKER_REGISTRY = 'localhost:5000'
+        APP_NAME = 'postfix'
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/main']], 
+                    doGenerateSubmoduleConfigurations: false, 
+                    extensions: [], 
+                    submoduleCfg: [], 
+                    userRemoteConfigs: [[
+                        credentialsId: 'gitlab-credentials', 
+                        url: 'http://gitlab.example.com/gitops/postfix-config.git'
+                    ]]
+                ])
+            }
+        }
+        
+        stage('Validate Configuration') {
+            steps {
+                // Vérifier la syntaxe des fichiers Docker Compose
+                sh 'docker-compose -f docker-compose.yml config'
+                
+                // Vérifier les configurations Postfix
+                sh '''
+                if [ -f postfix/main.cf ]; then
+                    postconf -c postfix/ -n || true
+                fi
+                '''
+            }
+        }
+        
+        stage('Test Configuration') {
+            steps {
+                // Lancer un test avec Docker Compose si un fichier de test existe
+                sh '''
+                if [ -f docker-compose.test.yml ]; then
+                    docker-compose -f docker-compose.yml -f docker-compose.test.yml up --exit-code-from test
+                else
+                    echo "No test configuration found, skipping tests"
+                fi
+                '''
+            }
+        }
+        
+        stage('Build Custom Images') {
+            steps {
+                // Construire des images personnalisées si nécessaire
+                sh '''
+                if [ -f Dockerfile.postfix ]; then
+                    docker build -t ${DOCKER_REGISTRY}/${APP_NAME}-custom:${IMAGE_TAG} -f Dockerfile.postfix .
+                    docker tag ${DOCKER_REGISTRY}/${APP_NAME}-custom:${IMAGE_TAG} ${DOCKER_REGISTRY}/${APP_NAME}-custom:latest
+                fi
+                '''
+            }
+        }
+        
+        stage('Push Custom Images') {
+            when {
+                expression { return fileExists('Dockerfile.postfix') }
+            }
+            steps {
+                sh """
+                docker push ${DOCKER_REGISTRY}/${APP_NAME}-custom:${IMAGE_TAG}
+                docker push ${DOCKER_REGISTRY}/${APP_NAME}-custom:latest
+                """
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            steps {
+                // Mettre à jour les versions d'image dans la configuration
+                sh '''
+                if [ -f Dockerfile.postfix ]; then
+                    sed -i "s|image: .*postfix-custom:.*|image: ${DOCKER_REGISTRY}/${APP_NAME}-custom:${IMAGE_TAG}|g" docker-compose.yml
+                fi
+                '''
+                
+                // Copier les fichiers de configuration modifiés
+                sh """
+                # Créer un répertoire temporaire
+                ssh admin@postfix 'mkdir -p /tmp/postfix-update-${BUILD_NUMBER}'
+                
+                # Copier les fichiers de configuration
+                scp -r docker-compose.yml traefik/* postfix/* admin@postfix:/tmp/postfix-update-${BUILD_NUMBER}/
+                
+                # Déployer les changements
+                ssh admin@postfix '
+                    # Sauvegarder la configuration actuelle
+                    cp -r /opt/postfix /opt/postfix-backup-$(date +%Y%m%d-%H%M%S)
+                    
+                    # Copier les nouveaux fichiers
+                    cp -r /tmp/postfix-update-${BUILD_NUMBER}/* /opt/postfix/
+                    
+                    # Redémarrer les services
+                    cd /opt/postfix && docker-compose up -d
+                    
+                    # Nettoyer
+                    rm -rf /tmp/postfix-update-${BUILD_NUMBER}
+                '
+                """
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                // Attendre que les services démarrent
+                sh "sleep 15"
+                
+                // Vérifier que les services sont en cours d'exécution
+                sh """
+                ssh admin@postfix '
+                    cd /opt/postfix && 
+                    docker-compose ps | grep -q "Up" && 
+                    echo "Services are running correctly" || 
+                    (echo "Services failed to start properly" && exit 1)
+                '
+                """
+                
+                // Vérifier que Postfix répond
+                sh """
+                ssh admin@postfix '
+                    # Test SMTP avec timeout
+                    timeout 5 bash -c "</dev/tcp/localhost/25" && 
+                    echo "Postfix SMTP is responding correctly" || 
+                    (echo "Postfix SMTP is not responding" && exit 1)
+                '
+                """
+            }
+        }
+        
+        stage('Deploy to Production') {
+            when {
+                expression { return params.DEPLOY_TO_PRODUCTION == true }
+            }
+            steps {
+                // Cette étape serait implémentée pour un environnement de production séparé
+                echo "Deploying to production environment"
+                // Implémenter la logique de déploiement en production ici
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo 'Postfix configuration deployment completed successfully!'
+            // Notifier les parties prenantes du succès du déploiement
+            slackSend channel: '#deployments', 
+                      color: 'good', 
+                      message: "Postfix Deployment Successful: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        }
+        failure {
+            echo 'Postfix configuration deployment failed!'
+            // Notifier les parties prenantes de l'échec du déploiement
+            slackSend channel: '#deployments', 
+                      color: 'danger', 
+                      message: "Postfix Deployment Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+            
+            // Restaurer la dernière configuration fonctionnelle si nécessaire
+            sh """
+            ssh admin@postfix '
+                # Trouver la dernière sauvegarde
+                LATEST_BACKUP=\$(ls -td /opt/postfix-backup-* | head -1)
+                
+                if [ -n "\$LATEST_BACKUP" ]; then
+                    echo "Rolling back to \$LATEST_BACKUP"
+                    cp -r \$LATEST_BACKUP/* /opt/postfix/
+                    cd /opt/postfix && docker-compose down && docker-compose up -d
+                else
+                    echo "No backup found for rollback"
+                fi
+            '
+            """
+        }
+        always {
+            // Nettoyer l'espace de travail
+            cleanWs()
+        }
+    }
+}

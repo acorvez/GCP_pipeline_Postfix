@@ -1,0 +1,147 @@
+---
+- name: Create Monitoring directory structure
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+  with_items:
+    - /opt/monitoring
+    - /opt/monitoring/prometheus
+    - /opt/monitoring/prometheus/config
+    - /opt/monitoring/grafana
+    - /opt/monitoring/grafana/provisioning
+    - /opt/monitoring/grafana/provisioning/datasources
+    - /opt/monitoring/grafana/provisioning/dashboards
+    - /opt/monitoring/grafana/dashboards
+    - /opt/monitoring/alertmanager
+    - /opt/monitoring/node-exporter
+
+# Créer spécifiquement les répertoires de données dans /opt
+- name: Create monitoring data directories in /opt
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+    owner: 1000  # Pour les permissions Docker
+    group: 1000
+  with_items:
+    - /opt/monitoring-data
+    - /opt/monitoring-data/prometheus
+    - /opt/monitoring-data/grafana
+    - /opt/monitoring-data/alertmanager
+
+# Vérifier si le montage /mnt/monitoring-data existe et est accessible
+- name: Check if monitoring data mount exists
+  stat:
+    path: /mnt/monitoring-data
+  register: mnt_monitoring_data
+  ignore_errors: yes
+
+# Vérifier si le montage est réellement accessible
+- name: Check if monitoring data mount is accessible
+  command: touch /mnt/monitoring-data/test_access
+  register: mount_access_test
+  ignore_errors: yes
+  when: mnt_monitoring_data.stat.exists
+
+- name: Remove test file
+  file:
+    path: /mnt/monitoring-data/test_access
+    state: absent
+  ignore_errors: yes
+  when: mnt_monitoring_data.stat.exists and mount_access_test is success
+
+# Définir une variable pour indiquer si on peut utiliser le montage
+- name: Set mount usability flag
+  set_fact:
+    use_mnt_path: "{{ mnt_monitoring_data.stat.exists and mount_access_test is success }}"
+
+# Si /mnt/monitoring-data existe et est accessible, créer les sous-répertoires
+- name: Create subdirectories in /mnt/monitoring-data if it is accessible
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+    owner: 1000  # Pour les permissions Docker
+    group: 1000
+  with_items:
+    - /mnt/monitoring-data/prometheus
+    - /mnt/monitoring-data/grafana
+    - /mnt/monitoring-data/alertmanager
+  when: use_mnt_path | default(false) | bool
+  ignore_errors: yes
+
+# Mettre à jour le template docker-compose.yml
+- name: Copy docker-compose.yml
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/monitoring/docker-compose.yml
+    mode: 0644
+
+- name: Copy Prometheus configuration
+  template:
+    src: prometheus.yml.j2
+    dest: /opt/monitoring/prometheus/config/prometheus.yml
+    mode: 0644
+
+- name: Copy AlertManager configuration
+  template:
+    src: alertmanager.yml.j2
+    dest: /opt/monitoring/alertmanager/alertmanager.yml
+    mode: 0644
+
+- name: Copy Grafana datasources
+  template:
+    src: datasources.yml.j2
+    dest: /opt/monitoring/grafana/provisioning/datasources/datasources.yml
+    mode: 0644
+
+- name: Copy Grafana dashboard provisioning
+  template:
+    src: dashboards.yml.j2
+    dest: /opt/monitoring/grafana/provisioning/dashboards/dashboards.yml
+    mode: 0644
+
+- name: Copy Grafana dashboards
+  copy:
+    src: "{{ item }}"
+    dest: /opt/monitoring/grafana/dashboards/
+    mode: 0644
+  with_fileglob:
+    - dashboards/*.json
+
+# Démarrer les services
+- name: Start Monitoring services with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/monitoring
+    state: present
+  register: compose_result
+  ignore_errors: yes
+
+# En cas d'échec, forcer l'utilisation des chemins dans /opt
+- name: Force use of /opt paths if compose failed
+  set_fact:
+    use_mnt_path: false
+  when: compose_result is failed
+
+# Mettre à jour docker-compose.yml si nécessaire
+- name: Update docker-compose.yml if needed
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/monitoring/docker-compose.yml
+    mode: 0644
+  when: compose_result is failed
+
+# Réessayer avec les chemins /opt
+- name: Retry starting services
+  community.docker.docker_compose_v2:
+    project_src: /opt/monitoring
+    state: present
+  when: compose_result is failed
+
+- name: Print Grafana access info
+  debug:
+    msg:
+      - "Grafana has been set up successfully!"
+      - "Grafana is accessible at http://{{ hostvars['monitoring']['ansible_host'] }}:3000"
+      - "Default credentials: admin/admin"

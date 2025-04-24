@@ -1,0 +1,19 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Check if additional disk exists
+      stat:
+        path: /dev/sdb
+      register: disk_exists
+      
+    - name: Create data directories if disk doesn't exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: 0755
+      with_items:
+        - /var/lib/docker/volumes
+        - /mnt/gitlab-data
+        - /mnt/monitoring-data
+      when: not disk_exists.stat.exists

@@ -1,0 +1,156 @@
+---
+- name: Install required dependencies
+  apt:
+    name:
+      - curl
+      - openssh-server
+      - ca-certificates
+      - postfix
+      - python3-pip
+      - tzdata
+      - perl
+    state: present
+    update_cache: yes
+
+- name: Check if additional disk exists
+  stat:
+    path: /dev/sdb
+  register: disk_exists
+
+- name: Ensure GitLab data directory exists
+  file:
+    path: "/opt/gitlab-data"
+    state: directory
+    mode: 0755
+
+- name: Create GitLab data subdirectories
+  file:
+    path: "/opt/gitlab-data/{{ item }}"
+    state: directory
+    owner: git
+    group: git
+    mode: 0755
+  with_items:
+    - git-data
+    - git-data/repositories
+    - gitlab-rails
+    - gitlab-rails/uploads
+    - gitlab-rails/shared
+    - gitlab-rails/backups
+    - postgresql
+  ignore_errors: yes
+
+
+- name: Create SSL directory
+  file:
+    path: /etc/gitlab/ssl
+    state: directory
+    mode: 0755
+
+- name: Generate self-signed SSL certificate
+  command: >
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048
+    -keyout /etc/gitlab/ssl/gitlab.example.com.key
+    -out /etc/gitlab/ssl/gitlab.example.com.crt
+    -subj "/C=FR/ST=Paris/L=Paris/O=GitOps/CN=gitlab.example.com"
+    -addext "subjectAltName = DNS:gitlab.example.com,DNS:gitlab"
+  args:
+    creates: /etc/gitlab/ssl/gitlab.example.com.crt
+
+- name: Add GitLab repository
+  shell: |
+    curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
+  args:
+    creates: /etc/apt/sources.list.d/gitlab_gitlab-ce.list
+
+- name: Force complete GitLab removal
+  shell: |
+    gitlab-ctl stop || true
+    apt-get remove --purge -y gitlab-ce || true
+    apt-get autoremove --purge -y
+    rm -rf /opt/gitlab /var/opt/gitlab /etc/gitlab /var/log/gitlab
+    dpkg --configure -a
+    apt-get update
+  ignore_errors: yes
+
+- name: Check if GitLab is installed
+  shell: dpkg-query -W -f='${Status}' gitlab-ce 2>/dev/null || echo "not-installed"
+  register: gitlab_status
+  changed_when: false
+
+- name: Stop GitLab if installed
+  command: gitlab-ctl stop
+  when: "'installed' in gitlab_status.stdout"
+  ignore_errors: yes
+
+- name: Remove GitLab if installation is broken
+  apt:
+    name: gitlab-ce
+    state: absent
+    purge: yes
+  when: "'installed' in gitlab_status.stdout"
+
+- name: Clean up GitLab directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - /etc/gitlab
+    - /var/opt/gitlab
+  when: "'installed' in gitlab_status.stdout"
+
+- name: Install GitLab
+  apt:
+    name: gitlab-ce
+    state: present
+    update_cache: yes
+  environment:
+    EXTERNAL_URL: "http://gitlab.example.com"
+  ignore_errors: yes
+
+- name: Update GitLab configuration
+  template:
+    src: gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+    mode: 0600
+
+- name: Clear any stale configuration
+  shell: |
+    rm -rf /var/opt/gitlab/gitaly/*
+    rm -rf /var/opt/gitlab/git-data || true
+    rm -f /var/opt/gitlab/.gitconfig
+  ignore_errors: yes
+
+- name: Reconfigure GitLab with new paths
+  shell: GITLAB_SKIP_STORAGE_VALIDATION=true gitlab-ctl reconfigure
+  ignore_errors: yes
+
+- name: Start GitLab services
+  command: gitlab-ctl start
+  ignore_errors: yes
+
+- name: Wait for GitLab to be available
+  uri:
+    url: http://localhost
+    status_code: [200, 302]
+    validate_certs: no
+    timeout: 5
+  register: gitlab_result
+  until: gitlab_result.status == 200 or gitlab_result.status == 302
+  retries: 30
+  delay: 10
+  ignore_errors: yes
+
+- name: Get GitLab root password
+  shell: |
+    if [ -f /etc/gitlab/initial_root_password ]; then
+      cat /etc/gitlab/initial_root_password | grep Password | awk '{print $2}'
+    else
+      echo "{{ gitlab_root_password | default('gitlabadmin123') }}"
+    fi
+  register: gitlab_root_pass
+  changed_when: false
+
+- name: Display GitLab root password
+  debug:
+    var: gitlab_root_pass.stdout

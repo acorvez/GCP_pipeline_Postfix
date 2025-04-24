@@ -1,0 +1,11 @@
+---
+- name: restart gitlab
+  command: gitlab-ctl restart
+  ignore_errors: yes
+  when: inventory_hostname in groups['gitlab']
+
+- name: restart jenkins
+  systemd:
+    name: jenkins
+    state: restarted
+  when: inventory_hostname in groups['jenkins']

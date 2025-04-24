@@ -1,0 +1,61 @@
+---
+- hosts: gitlab
+  become: true
+  tasks:
+    - name: Check if mnt directory has issues
+      shell: touch /mnt/test_file
+      register: mnt_test
+      failed_when: false
+      changed_when: false
+
+    - name: Create alternate GitLab data directory
+      file:
+        path: /opt/gitlab-data
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+      when: mnt_test.rc != 0
+
+    - name: Create GitLab subdirectories in alternate location
+      file:
+        path: "/opt/gitlab-data/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+      with_items:
+        - git-data
+        - gitlab-rails
+        - postgresql
+      when: mnt_test.rc != 0
+
+    - name: Update GitLab configuration to use alternate path
+      copy:
+        content: |
+          external_url 'http://gitlab.example.com'
+          letsencrypt['enable'] = false
+          
+          # Configuration des répertoires de données
+          git_data_dirs({
+            "default" => {
+              "path" => "/opt/gitlab-data/git-data"
+            }
+          })
+          
+          # Configuration PostgreSQL
+          postgresql['data_dir'] = "/opt/gitlab-data/postgresql"
+          
+          # Configuration Rails
+          gitlab_rails['uploads_directory'] = "/opt/gitlab-data/gitlab-rails/uploads"
+          gitlab_rails['shared_path'] = "/opt/gitlab-data/gitlab-rails/shared"
+          gitlab_rails['backup_path'] = "/opt/gitlab-data/gitlab-rails/backups"
+          
+          # Prometheus (pas Grafana)
+          prometheus['enable'] = true
+          
+          # Configuration des sauvegardes
+          gitlab_rails['backup_keep_time'] = 604800
+        dest: /etc/gitlab/gitlab.rb
+        mode: 0600
+      when: mnt_test.rc != 0

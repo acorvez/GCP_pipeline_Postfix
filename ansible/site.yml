@@ -1,0 +1,44 @@
+---
+- name: Install common packages and setup prerequisites
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: Setup OpenVPN server
+  hosts: openvpn
+  become: true
+  roles:
+    - openvpn
+
+- name: Setup Jenkins CI/CD server
+  hosts: jenkins
+  become: true
+  roles:
+    - jenkins
+
+- name: Setup GitLab server
+  hosts: gitlab
+  become: true
+  roles:
+    - gitlab
+
+- name: Setup Postfix with Docker and PostgreSQL
+  hosts: postfix
+  become: true
+  roles:
+    - docker
+    - postfix
+
+- name: Setup Monitoring with Prometheus and Grafana
+  hosts: monitoring
+  become: true
+  roles:
+    - docker
+    - monitoring
+
+- name: Configure CI/CD pipeline integration
+  hosts: gitlab:jenkins
+  become: true
+  roles:
+    - pipeline

@@ -1,0 +1,47 @@
+- job:
+    name: postfix-deployment
+    description: 'Pipeline for deploying Postfix mail server configuration'
+    project-type: pipeline
+    pipeline-scm:
+      scm:
+        - git:
+            url: http://gitlab.example.com/gitops/postfix-config.git
+            credentials-id: gitlab-credentials
+            branches:
+              - '*/main'
+            script-path: Jenkinsfile
+    triggers:
+      - gitlab:
+          trigger-on-push: true
+          trigger-on-merge-request: true
+          trigger-open-merge-request-push: 'never'
+          ci-skip: true
+          include-branches:
+            - main
+            - 'feature/*'
+            - 'release/*'
+          secret-token: 'your-webhook-secret'
+    publishers:
+      - email:
+          recipients: admin@example.com
+      - archive:
+          artifacts: 'config/*.cf, docker-compose.yml'
+          allow-empty: true
+    properties:
+      - build-discarder:
+          days-to-keep: 30
+          num-to-keep: 10
+      - parameters:
+          - boolean:
+              name: DEPLOY_TO_PRODUCTION
+              default: false
+              description: 'Déployer également en production après les tests'
+          - string:
+              name: POSTFIX_HOSTNAME
+              default: 'mail.example.com'
+              description: 'Nom d'hôte du serveur Postfix'
+          - string:
+              name: ALLOWED_SENDER_DOMAINS
+              default: 'example.com'
+              description: 'Domaines autorisés pour l'envoi d'emails'
+            

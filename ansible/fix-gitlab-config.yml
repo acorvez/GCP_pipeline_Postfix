@@ -1,0 +1,38 @@
+---
+- hosts: gitlab
+  become: true
+  tasks:
+    - name: Ensure GitLab templates directory exists
+      file:
+        path: /etc/gitlab/
+        state: directory
+        mode: 0755
+        
+    - name: Create GitLab configuration with HTTP
+      copy:
+        content: |
+          external_url 'http://gitlab.example.com'
+          letsencrypt['enable'] = false
+          
+          # Configuration des répertoires de données
+          git_data_dirs({
+            "default" => {
+              "path" => "/mnt/gitlab-data/git-data"
+            }
+          })
+          
+          # Configuration PostgreSQL
+          postgresql['data_dir'] = "/mnt/gitlab-data/postgresql"
+          
+          # Configuration Rails
+          gitlab_rails['uploads_directory'] = "/mnt/gitlab-data/gitlab-rails/uploads"
+          gitlab_rails['shared_path'] = "/mnt/gitlab-data/gitlab-rails/shared"
+          gitlab_rails['backup_path'] = "/mnt/gitlab-data/gitlab-rails/backups"
+          
+          # Prometheus (pas Grafana)
+          prometheus['enable'] = true
+          
+          # Configuration des sauvegardes
+          gitlab_rails['backup_keep_time'] = 604800
+        dest: /etc/gitlab/gitlab.rb
+        mode: 0600

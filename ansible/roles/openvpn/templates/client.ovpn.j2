@@ -1,0 +1,28 @@
+client
+dev tun
+proto udp
+remote {{ ansible_host }} 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+cipher AES-256-CBC
+verb 3
+
+<ca>
+# Le certificat CA sera inséré ici
+</ca>
+
+<cert>
+# Le certificat client sera inséré ici
+</cert>
+
+<key>
+# La clé privée client sera insérée ici
+</key>
+
+<tls-auth>
+# La clé TLS-Auth sera insérée ici
+</tls-auth>
+key-direction 1

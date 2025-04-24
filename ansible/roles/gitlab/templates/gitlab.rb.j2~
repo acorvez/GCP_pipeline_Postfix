@@ -1,0 +1,55 @@
+external_url 'http://gitlab.example.com'
+
+# Désactiver Let's Encrypt explicitement
+letsencrypt['enable'] = false
+
+# Utiliser des certificats SSL auto-signés
+nginx['ssl_certificate'] = "/etc/gitlab/ssl/gitlab.example.com.crt"
+nginx['ssl_certificate_key'] = "/etc/gitlab/ssl/gitlab.example.com.key"
+
+# Définir les répertoires de données
+git_data_dirs({
+  "default" => {
+    "path" => "/mnt/gitlab-data/git-data"
+  }
+})
+
+# Configuration PostgreSQL
+postgresql['data_dir'] = "/mnt/gitlab-data/postgresql"
+
+# Configuration de l'application
+gitlab_rails['uploads_directory'] = "/mnt/gitlab-data/gitlab-rails/uploads"
+gitlab_rails['shared_path'] = "/mnt/gitlab-data/gitlab-rails/shared"
+gitlab_rails['backup_path'] = "/mnt/gitlab-data/gitlab-rails/backups"
+
+# Configuration SMTP pour les emails
+gitlab_rails['smtp_enable'] = true
+gitlab_rails['smtp_address'] = "{{ hostvars['postfix']['ansible_host'] }}"
+gitlab_rails['smtp_port'] = 25
+gitlab_rails['smtp_domain'] = "example.com"
+gitlab_rails['smtp_tls'] = false
+gitlab_rails['smtp_openssl_verify_mode'] = 'none'
+gitlab_rails['smtp_enable_starttls_auto'] = false
+gitlab_rails['smtp_authentication'] = false
+gitlab_rails['gitlab_email_from'] = 'gitlab@example.com'
+gitlab_rails['gitlab_email_reply_to'] = 'noreply@example.com'
+
+# Activer le monitoring Prometheus (mais pas Grafana, car nous utilisons notre propre serveur)
+prometheus['enable'] = true
+
+# Désactiver les services intégrés que nous n'utilisons pas
+node_exporter['enable'] = false
+prometheus_monitoring['enable'] = false
+
+# Paramètres de sécurité
+gitlab_rails['two_factor_enabled'] = true
+gitlab_rails['rack_attack_git_basic_auth'] = {
+  'enabled' => true,
+  'ip_whitelist' => ["10.0.0.0/24", "10.8.0.0/24"],
+  'maxretry' => 10,
+  'findtime' => 60,
+  'bantime' => 3600
+}
+
+# Configuration des sauvegardes
+gitlab_rails['backup_keep_time'] = 604800  # 1 semaine en secondes

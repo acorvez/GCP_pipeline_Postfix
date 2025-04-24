@@ -1,0 +1,54 @@
+-- Create tables for Postfix
+CREATE TABLE domains (
+  id SERIAL PRIMARY KEY,
+  domain VARCHAR(255) NOT NULL UNIQUE,
+  active BOOLEAN DEFAULT true
+);
+
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL,
+  name VARCHAR(255),
+  domain_id INTEGER REFERENCES domains(id) ON DELETE CASCADE,
+  active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE aliases (
+  id SERIAL PRIMARY KEY,
+  source VARCHAR(255) NOT NULL,
+  destination VARCHAR(255) NOT NULL,
+  domain_id INTEGER REFERENCES domains(id) ON DELETE CASCADE,
+  active BOOLEAN DEFAULT true
+);
+
+-- Create indexes for performance
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_aliases_source ON aliases(source);
+
+-- Insert sample domain
+INSERT INTO domains (domain) VALUES ('example.com');
+
+-- Insert sample user (password: securepass)
+INSERT INTO users (email, password, name, domain_id) 
+VALUES ('admin@example.com', '{SHA512-CRYPT}$6$RqvMlIz2$XVsaOF7GtRFuZlP2YGC6HXxKG0mbTv3gWKILGvZhkNHmyJjC9y9zcFN/E4NnTKXAY/XHx9OY9enbVCRFSNJ9G.', 'Admin User', 1);
+
+-- Insert sample aliases
+INSERT INTO aliases (source, destination, domain_id) 
+VALUES ('info@example.com', 'admin@example.com', 1);
+
+INSERT INTO aliases (source, destination, domain_id) 
+VALUES ('webmaster@example.com', 'admin@example.com', 1);
+
+-- Create user with restricted permissions for Postfix access
+CREATE USER postfix_user WITH PASSWORD 'postfix_password';
+GRANT SELECT ON domains, users, aliases TO postfix_user;
+
+-- Create view for mail delivery
+CREATE VIEW mail_delivery AS 
+SELECT u.email, 'maildir:/var/mail/' || u.email || '/' AS destination 
+FROM users u 
+WHERE u.active = true;
+
+GRANT SELECT ON mail_delivery TO postfix_user;

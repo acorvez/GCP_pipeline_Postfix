@@ -1,0 +1,145 @@
+---
+- name: Install required packages
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg-agent
+      - software-properties-common
+      - python3-pip
+    state: present
+    update_cache: yes
+
+# Nettoyage des configurations Docker existantes
+- name: Remove existing Docker apt repositories
+  file:
+    path: "/etc/apt/sources.list.d/docker*.list"
+    state: absent
+
+- name: Remove existing Docker keyrings
+  file:
+    path: "/usr/share/keyrings/docker*.gpg"
+    state: absent
+
+- name: Create keyrings directory
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: 0755
+
+# Ajout propre de la clé Docker
+- name: Add Docker GPG apt key
+  shell: |
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+  args:
+    creates: /etc/apt/keyrings/docker.gpg
+
+# Ajout du dépôt Docker avec la nouvelle méthode de signature
+- name: Add Docker repository
+  shell: |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+  args:
+    creates: /etc/apt/sources.list.d/docker.list
+
+- name: Update apt cache after adding Docker repository
+  apt:
+    update_cache: yes
+
+- name: Install Docker
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: present
+    update_cache: yes
+
+- name: Install Docker Compose
+  get_url:
+    url: https://github.com/docker/compose/releases/download/v2.18.1/docker-compose-linux-x86_64
+    dest: /usr/local/bin/docker-compose
+    mode: 0755
+
+- name: Install Python Docker SDK
+  pip:
+    name:
+      - docker
+      - docker-compose
+    state: present
+
+- name: Create docker group
+  group:
+    name: docker
+    state: present
+
+- name: Add admin user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Enable and start Docker service
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+
+
+- name: Check if additional disk exists
+  stat:
+    path: /dev/sdb
+  register: disk_exists
+
+- name: Format and mount data volume
+  block:
+    - name: Check if filesystem exists
+      command: blkid -p /dev/sdb
+      register: blkid_result
+      failed_when: false
+      changed_when: false
+
+    - name: Create filesystem on data volume
+      command: mkfs.ext4 /dev/sdb
+      when: blkid_result.rc != 0
+
+    - name: Create docker data mount point
+      file:
+        path: /var/lib/docker/volumes
+        state: directory
+        mode: 0755
+
+    - name: Add mount to fstab
+      mount:
+        path: /var/lib/docker/volumes
+        src: /dev/sdb
+        fstype: ext4
+        opts: defaults
+        state: mounted
+  when: disk_exists.stat.exists
+
+- name: Create docker volumes directory if disk doesn't exist
+  file:
+    path: /var/lib/docker/volumes
+    state: directory
+    mode: 0755
+  when: not disk_exists.stat.exists
+
+# Ajouter ceci après la création des répertoires de base
+- name: Create monitoring data directories with proper permissions
+  file:
+    path: "/opt/monitoring-data/{{ item.dir }}"
+    state: directory
+    mode: 0755
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+  with_items:
+    - { dir: "", owner: "root", group: "root" }
+    - { dir: "prometheus", owner: "nobody", group: "nogroup" }
+    - { dir: "grafana", owner: "472", group: "472" }
+    - { dir: "grafana/plugins", owner: "472", group: "472" }
+    - { dir: "grafana/provisioning", owner: "472", group: "472" }
+    - { dir: "grafana/dashboards", owner: "472", group: "472" }
+    - { dir: "alertmanager", owner: "nobody", group: "nogroup" }

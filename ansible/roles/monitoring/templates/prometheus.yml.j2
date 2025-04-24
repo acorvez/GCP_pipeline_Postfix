@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  - job_name: 'gitlab'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['{{ hostvars['gitlab']['ansible_host'] }}:9090']
+
+  - job_name: 'jenkins'
+    metrics_path: /prometheus
+    static_configs:
+      - targets: ['{{ hostvars['jenkins']['ansible_host'] }}:8080']
+
+  - job_name: 'postfix'
+    static_configs:
+      - targets: ['{{ hostvars['postfix']['ansible_host'] }}:9154']
+
+  - job_name: 'openvpn'
+    static_configs:
+      - targets: ['{{ hostvars['openvpn']['ansible_host'] }}:9176']
+
+  - job_name: 'node-exporters'
+    static_configs:
+      - targets:
+        - '{{ hostvars['gitlab']['ansible_host'] }}:9100'
+        - '{{ hostvars['jenkins']['ansible_host'] }}:9100'
+        - '{{ hostvars['postfix']['ansible_host'] }}:9100'
+        - '{{ hostvars['openvpn']['ansible_host'] }}:9100'

@@ -1,0 +1,154 @@
+---
+# Installation des packages de base
+- name: Install common packages
+  apt:
+    name:
+      - fail2ban
+      - ufw
+      - curl
+      - wget
+      - vim
+      - htop
+      - net-tools
+      - python3-pip
+      - python3-apt
+      - unzip
+      - git
+      - ca-certificates
+      - gnupg
+      - lsb-release
+    state: present
+    update_cache: yes
+
+# Configuration de fail2ban
+- name: Configure fail2ban
+  template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: 0644
+  notify: restart fail2ban
+
+# Configuration du firewall UFW
+- name: Configure UFW defaults
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  with_items:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+
+# Vérification et préparation des disques
+- name: Check if additional disk exists
+  stat:
+    path: /dev/sdb
+  register: disk_exists
+
+# Vérification des montages et création des répertoires de données
+- name: Check if /mnt/data is accessible
+  stat:
+    path: /mnt/data
+  register: mnt_data_exists
+  ignore_errors: yes
+
+- name: Test if /mnt/data is writable
+  command: touch /mnt/data/test_access
+  register: mnt_data_writable
+  ignore_errors: yes
+  when: mnt_data_exists.stat.exists | default(false)
+  
+- name: Remove test file
+  file:
+    path: /mnt/data/test_access
+    state: absent
+  ignore_errors: yes
+  when: mnt_data_exists.stat.exists | default(false) and mnt_data_writable is success
+
+- name: Set mount usability flag
+  set_fact:
+    use_mnt_path: "{{ mnt_data_exists.stat.exists | default(false) and mnt_data_writable is success }}"
+
+- name: Create necessary directories under /opt
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+  with_items:
+    - /opt/gitlab-data
+    - /opt/monitoring-data
+    - /opt/postfix
+  ignore_errors: yes
+
+- name: Create data directories in /mnt/data if accessible
+  file:
+    path: "/mnt/data/{{ item }}"
+    state: directory
+    mode: 0755
+  with_items:
+    - gitlab
+    - monitoring
+    - postfix
+  when: use_mnt_path | bool
+  ignore_errors: yes
+
+- name: Create symlinks if /mnt/data is accessible
+  file:
+    src: "/mnt/data/{{ item.subdir }}"
+    path: "{{ item.path }}"
+    state: link
+    force: yes
+  with_items:
+    - { subdir: 'gitlab', path: '/opt/gitlab-data' }
+    - { subdir: 'monitoring', path: '/opt/monitoring-data' }
+    - { subdir: 'postfix', path: '/opt/postfix' }
+  when: use_mnt_path | bool
+  ignore_errors: yes
+
+# Configuration du swap
+- name: Check if swap file exists
+  stat:
+    path: /swapfile
+  register: swap_file_check
+
+- name: Create swap file if it doesn't exist
+  command: dd if=/dev/zero of=/swapfile bs=1M count=2048
+  when: not swap_file_check.stat.exists
+
+- name: Set permissions on swap file
+  file:
+    path: /swapfile
+    mode: 0600
+  when: not swap_file_check.stat.exists
+
+- name: Make swap file
+  command: mkswap /swapfile
+  when: not swap_file_check.stat.exists
+
+- name: Enable swap file
+  command: swapon /swapfile
+  when: not swap_file_check.stat.exists and ansible_swaptotal_mb < 1
+
+- name: Add swap to fstab
+  lineinfile:
+    path: /etc/fstab
+    line: "/swapfile none swap sw 0 0"
+    state: present
+  when: not swap_file_check.stat.exists
+
+# Paramétrage du hostname
+- name: Set hostname
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+# Configuration supplémentaire selon les besoins
+- name: Set system limits
+  pam_limits:
+    domain: '*'
+    limit_type: "{{ item.limit_type }}"
+    limit_item: "{{ item.limit_item }}"
+    value: "{{ item.value }}"
+  with_items:
+    - { limit_type: soft, limit_item: nofile, value: 65535 }
+    - { limit_type: hard, limit_item: nofile, value: 65535 }
+  ignore_errors: yes

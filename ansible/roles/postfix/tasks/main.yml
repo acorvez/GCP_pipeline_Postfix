@@ -1,0 +1,63 @@
+---
+- name: Create Postfix directory structure
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+  with_items:
+    - /opt/postfix
+    - /opt/postfix/traefik
+    - /opt/postfix/postfix/data
+    - /opt/postfix/postfix/logs
+    - /opt/postfix/postgres/data
+    - /opt/postfix/postgres/init
+    - /opt/postfix/pgadmin
+    - /opt/postfix/letsencrypt
+
+- name: Copy docker-compose.yml
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/postfix/docker-compose.yml
+    mode: 0644
+
+- name: Copy Traefik configuration
+  template:
+    src: traefik.yml.j2
+    dest: /opt/postfix/traefik/traefik.yml
+    mode: 0644
+
+- name: Copy PostgreSQL init scripts
+  template:
+    src: init-postfix-db.sql.j2
+    dest: /opt/postfix/postgres/init/init-postfix-db.sql
+    mode: 0644
+
+- name: Pull Docker images
+  docker_image:
+    name: "{{ item }}"
+    source: pull
+  with_items:
+    - traefik:v2.9
+    - boky/postfix
+    - postgres:14
+    - dpage/pgadmin4
+
+- name: Start Postfix services with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/postfix
+    state: present
+
+- name: Create cron job for backups
+  cron:
+    name: "Backup PostgreSQL databases"
+    hour: "2"
+    minute: "0"
+    job: "cd /opt/postfix && docker-compose exec -T postgres pg_dumpall -U postfix > /opt/postfix/postgres/backup/backup_$(date +\\%Y\\%m\\%d).sql"
+
+- name: Print access information
+  debug:
+    msg:
+      - "Postfix has been set up successfully!"
+      - "Webmail is available at: https://mail.example.com"
+      - "PGAdmin is available at: https://pgadmin.example.com"
+      - "Remember to update the DNS records and configure your firewall."

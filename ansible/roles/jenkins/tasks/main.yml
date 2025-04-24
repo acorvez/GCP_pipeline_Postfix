@@ -1,0 +1,162 @@
+---
+- name: Remove incorrect PPA repository
+  file:
+    path: "/etc/apt/sources.list.d/openjdk-r-ubuntu-ppa-*"
+    state: absent
+
+- name: Update apt cache after removing incorrect repository
+  apt:
+    update_cache: yes
+
+- name: Install dependencies
+  apt:
+    name:
+      - apt-transport-https
+      - gnupg2
+      - ca-certificates
+      - curl
+      - git
+      - python3-pip
+    state: present
+    update_cache: yes
+
+# Ajoutez les backports de Debian pour OpenJDK 17 si nécessaire
+- name: Ensure Debian backports repository is enabled
+  apt_repository:
+    repo: deb http://deb.debian.org/debian bullseye-backports main
+    state: present
+    filename: bullseye-backports
+  when: ansible_distribution == 'Debian' and ansible_distribution_release == 'bullseye'
+
+- name: Install Java 17
+  apt:
+    name: openjdk-17-jdk
+    state: present
+    default_release: bullseye-backports
+    update_cache: yes
+  when: ansible_distribution == 'Debian' and ansible_distribution_release == 'bullseye'
+
+# Version alternative qui fonctionne aussi sur d'autres versions de Debian
+- name: Install Java 17 (standard repos)
+  apt:
+    name: openjdk-17-jdk
+    state: present
+    update_cache: yes
+  when: not (ansible_distribution == 'Debian' and ansible_distribution_release == 'bullseye')
+
+- name: Set Java 17 as default
+  alternatives:
+    name: java
+    path: /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+
+- name: Add Jenkins apt key using correct method
+  get_url:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+    dest: /usr/share/keyrings/jenkins-keyring.asc
+    mode: '0644'
+
+- name: Add Jenkins repository with signed-by option
+  apt_repository:
+    repo: deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/
+    state: present
+    filename: jenkins
+    update_cache: yes
+
+- name: Install Jenkins
+  apt:
+    name: jenkins
+    state: present
+    update_cache: yes
+
+- name: Set JAVA_HOME for Jenkins
+  lineinfile:
+    path: /etc/default/jenkins
+    regexp: '^JAVA_HOME='
+    line: 'JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64'
+    create: yes
+  notify: restart jenkins
+
+- name: Create Jenkins directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: 0755
+  with_items:
+    - /var/lib/jenkins/plugins
+    - /var/lib/jenkins/jobs
+
+- name: Install required pip packages
+  pip:
+    name:
+      - jenkins-job-builder
+      - python-jenkins
+    state: present
+
+- name: Enable and start Jenkins service
+  systemd:
+    name: jenkins
+    state: started
+    enabled: yes
+
+- name: Wait for Jenkins to start up
+  uri:
+    url: http://localhost:8080
+    status_code: [200, 403]  # Accepter aussi le code 403 comme réussite
+    timeout: 5
+  register: jenkins_service_status
+  until: jenkins_service_status.status == 200 or jenkins_service_status.status == 403
+  retries: 60
+  delay: 5
+
+- name: Get Jenkins initial admin password
+  shell: cat /var/lib/jenkins/secrets/initialAdminPassword || echo "jenkinsadmin123"
+  register: jenkins_admin_password
+  changed_when: false
+  ignore_errors: yes
+
+- name: Print Jenkins initial admin password
+  debug:
+    msg: "Jenkins initial admin password: {{ jenkins_admin_password.stdout }}"
+
+- name: Download Jenkins CLI jar
+  get_url:
+    url: http://localhost:8080/jnlpJars/jenkins-cli.jar
+    dest: /var/lib/jenkins/jenkins-cli.jar
+    mode: 0440
+
+- name: Find jenkins-cli.jar location
+  shell: find / -name jenkins-cli.jar 2>/dev/null | head -n 1
+  register: jenkins_cli_location
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display jenkins-cli.jar location
+  debug:
+    var: jenkins_cli_location.stdout
+
+- name: Install suggested plugins
+  shell: >
+    java -jar /var/lib/jenkins/jenkins-cli.jar -s http://localhost:8080/ -auth admin:{{ jenkins_admin_password.stdout }} 
+    install-plugin workflow-aggregator git matrix-auth credentials-binding
+  register: plugins_result
+  changed_when: "'Already installed' not in plugins_result.stdout"
+  ignore_errors: yes
+
+- name: Restart Jenkins to apply plugins
+  systemd:
+    name: jenkins
+    state: restarted
+  when: plugins_result.changed
+
+- name: Wait for Jenkins to restart
+  uri:
+    url: http://localhost:8080
+    status_code: [200, 403]  # Accepter les codes 200 et 403
+    timeout: 5
+  register: jenkins_restart_status
+  until: jenkins_restart_status.status == 200 or jenkins_restart_status.status == 403
+  retries: 60
+  delay: 5
+  when: plugins_result.changed

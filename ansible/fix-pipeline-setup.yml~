@@ -1,0 +1,109 @@
+---
+# Playbook pour corriger les problèmes de configuration GitLab/Jenkins
+- hosts: gitlab_servers
+  become: true
+  tasks:
+    - name: Stop GitLab services
+      command: gitlab-ctl stop
+      ignore_errors: yes
+
+    - name: Create alternate GitLab data directory with proper permissions
+      file:
+        path: "/opt/gitlab-data/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+        recurse: yes
+      with_items:
+        - git-data
+        - git-data/repositories
+        - gitlab-rails
+        - gitlab-rails/uploads
+        - gitlab-rails/shared
+        - gitlab-rails/backups
+        - postgresql
+
+    - name: Update GitLab configuration to use alternate path
+      copy:
+        content: |
+          external_url 'http://gitlab.example.com'
+          letsencrypt['enable'] = false
+          
+          # Configuration des répertoires de données
+          git_data_dirs({
+            "default" => {
+              "path" => "/opt/gitlab-data/git-data"
+            }
+          })
+          
+          # Configuration PostgreSQL
+          postgresql['data_dir'] = "/opt/gitlab-data/postgresql"
+          
+          # Configuration Rails
+          gitlab_rails['uploads_directory'] = "/opt/gitlab-data/gitlab-rails/uploads"
+          gitlab_rails['shared_path'] = "/opt/gitlab-data/gitlab-rails/shared"
+          gitlab_rails['backup_path'] = "/opt/gitlab-data/gitlab-rails/backups"
+          
+          # Prometheus (pas Grafana)
+          prometheus['enable'] = true
+          
+          # Configuration des sauvegardes
+          gitlab_rails['backup_keep_time'] = 604800
+        dest: /etc/gitlab/gitlab.rb
+        mode: 0600
+
+    - name: Clear any stale configuration
+      shell: |
+        rm -rf /var/opt/gitlab/gitaly/*
+        rm -rf /var/opt/gitlab/git-data || true
+        rm -f /var/opt/gitlab/.gitconfig
+      ignore_errors: yes
+
+    - name: Reconfigure GitLab with new paths
+      shell: GITLAB_SKIP_STORAGE_VALIDATION=true gitlab-ctl reconfigure
+      ignore_errors: yes
+      
+    - name: Start GitLab services
+      command: gitlab-ctl start
+      ignore_errors: yes
+
+- hosts: jenkins_servers
+  become: true
+  tasks:
+    - name: Find jenkins-cli.jar location
+      shell: find / -name jenkins-cli.jar 2>/dev/null | head -n 1
+      register: jenkins_cli_location
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display jenkins-cli.jar location
+      debug:
+        var: jenkins_cli_location.stdout
+
+    - name: Get Jenkins initial admin password
+      shell: cat /var/lib/jenkins/secrets/initialAdminPassword || echo ""
+      register: jenkins_password
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display Jenkins initial password
+      debug:
+        var: jenkins_password.stdout
+
+    - name: Restart Jenkins service
+      service:
+        name: jenkins
+        state: restarted
+      ignore_errors: yes
+
+    - name: Wait for Jenkins to be fully operational
+      uri:
+        url: http://localhost:8080
+        status_code: [200, 403]
+        timeout: 5
+      register: jenkins_status
+      until: jenkins_status.status == 200 or jenkins_status.status == 403
+      retries: 30
+      delay: 10
+      ignore_errors: yes

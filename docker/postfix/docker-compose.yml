@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v2.9
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Dashboard (vous pouvez le sécuriser ou le supprimer en production)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik:/etc/traefik
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - web
+    command:
+      - "--api.insecure=true"  # À supprimer en production
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.email=your-email@example.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+
+  postfix:
+    image: boky/postfix
+    container_name: postfix
+    restart: unless-stopped
+    environment:
+      - HOSTNAME=mail.example.com
+      - ALLOWED_SENDER_DOMAINS=example.com
+      - DISABLE_CLAMAV=1  # Activer ou désactiver en fonction de vos besoins
+      - DISABLE_SPAMASSASSIN=1  # Activer ou désactiver en fonction de vos besoins
+      - POSTFIX_MAIL_NAME=mail.example.com
+      - POSTFIX_MAILBOX_SIZE_LIMIT=0
+      - POSTFIX_MESSAGE_SIZE_LIMIT=52428800  # 50 MB
+      - DB_HOST=postgres
+      - DB_USER=postfix
+      - DB_PASSWORD=securepassword
+      - DB_NAME=postfixdb
+    volumes:
+      - ./postfix/data:/var/mail
+      - ./postfix/logs:/var/log/mail
+    networks:
+      - web
+      - backend
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.postfix.rule=Host(`mail.example.com`)"
+      - "traefik.http.routers.postfix.entrypoints=websecure"
+      - "traefik.http.routers.postfix.tls.certresolver=myresolver"
+      - "traefik.http.services.postfix.loadbalancer.server.port=25"
+
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postfix
+      - POSTGRES_PASSWORD=securepassword
+      - POSTGRES_DB=postfixdb
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postfix -d postfixdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=securepassword
+    volumes:
+      - ./pgadmin:/var/lib/pgadmin
+    networks:
+      - web
+      - backend
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.example.com`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls.certresolver=myresolver"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+
+networks:
+  web:
+    external: false
+  backend:
+    external: false

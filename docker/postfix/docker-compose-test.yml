@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  test:
+    image: alpine:latest
+    depends_on:
+      - postfix
+    command: >
+      sh -c "
+        apk add --no-cache curl swaks netcat-openbsd &&
+        echo 'Waiting for postfix to start...' &&
+        until nc -z postfix 25; do sleep 1; done &&
+        echo 'Testing SMTP connection...' &&
+        if nc -z postfix 25; then
+          echo 'SMTP connection successful' &&
+          echo 'Testing mail sending...' &&
+          swaks --server postfix --to test@example.com --from test@example.com --body 'Test email' &&
+          echo 'All tests passed' &&
+          exit 0
+        else
+          echo 'SMTP connection failed' &&
+          exit 1
+        fi
+      "
+    networks:
+      - backend
+
+networks:
+  backend:
+    external: false

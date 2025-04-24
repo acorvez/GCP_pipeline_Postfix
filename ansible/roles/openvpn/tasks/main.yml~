@@ -1,0 +1,128 @@
+---
+- name: Install OpenVPN packages
+  apt:
+    name:
+      - openvpn
+      - easy-rsa
+      - iptables-persistent
+      - net-tools
+    state: present
+    update_cache: yes
+
+- name: Create OpenVPN directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0700
+  with_items:
+    - /etc/openvpn/server
+    - /etc/openvpn/client
+    - /etc/openvpn/easyrsa
+
+- name: Copy EasyRSA to OpenVPN directory
+  shell: "cp -r /usr/share/easy-rsa/* /etc/openvpn/easyrsa/"
+  args:
+    creates: /etc/openvpn/easyrsa/vars
+
+- name: Set up EasyRSA vars
+  template:
+    src: vars.j2
+    dest: /etc/openvpn/easyrsa/vars
+    mode: 0600
+
+- name: Initialize PKI
+  shell: |
+    cd /etc/openvpn/easyrsa
+    . ./vars
+    ./easyrsa --batch init-pki
+  args:
+    creates: /etc/openvpn/easyrsa/pki
+
+- name: Build CA
+  shell: |
+    cd /etc/openvpn/easyrsa
+    . ./vars
+    ./easyrsa --batch build-ca nopass
+  args:
+    creates: /etc/openvpn/easyrsa/pki/ca.crt
+
+- name: Generate server key
+  shell: |
+    cd /etc/openvpn/easyrsa
+    . ./vars
+    ./easyrsa --batch build-server-full server nopass
+  args:
+    creates: /etc/openvpn/easyrsa/pki/issued/server.crt
+
+- name: Generate DH parameters
+  shell: |
+    cd /etc/openvpn/easyrsa
+    . ./vars
+    ./easyrsa gen-dh
+  args:
+    creates: /etc/openvpn/easyrsa/pki/dh.pem
+
+- name: Generate TLS key
+  shell: |
+    cd /etc/openvpn
+    openvpn --genkey --secret /etc/openvpn/server/ta.key
+  args:
+    creates: /etc/openvpn/server/ta.key
+
+- name: Copy certificates to OpenVPN server directory
+  copy:
+    src: "/etc/openvpn/easyrsa/pki/{{ item.src }}"
+    dest: "/etc/openvpn/server/{{ item.dest }}"
+    remote_src: yes
+    mode: 0600
+  with_items:
+    - { src: "ca.crt", dest: "ca.crt" }
+    - { src: "issued/server.crt", dest: "server.crt" }
+    - { src: "private/server.key", dest: "server.key" }
+    - { src: "dh.pem", dest: "dh.pem" }
+
+- name: Generate client certificate
+  shell: |
+    cd /etc/openvpn/easyrsa
+    . ./vars
+    ./easyrsa --batch build-client-full client nopass
+  args:
+    creates: /etc/openvpn/easyrsa/pki/issued/client.crt
+
+- name: Create OpenVPN server config
+  template:
+    src: server.conf.j2
+    dest: /etc/openvpn/server.conf
+    mode: 0644
+
+- name: Create client config
+  template:
+    src: client.ovpn.j2
+    dest: /etc/openvpn/client/client.ovpn
+    mode: 0600
+
+- name: Enable IPv4 forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: 1
+    state: present
+    reload: yes
+
+- name: Setup iptables for NAT
+  iptables:
+    table: nat
+    chain: POSTROUTING
+    out_interface: ens4  # This might need to be adjusted based on your GCP network interface
+    jump: MASQUERADE
+    state: present
+
+- name: Save iptables rules
+  shell: iptables-save > /etc/iptables/rules.v4
+  args:
+    creates: /etc/iptables/rules.v4
+
+- name: Enable and start OpenVPN service
+  systemd:
+    name: openvpn@server
+    state: started
+    enabled: yes

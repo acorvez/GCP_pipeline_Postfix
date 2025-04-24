@@ -1,0 +1,41 @@
+- job:
+    name: postfix-deployment
+    description: 'Pipeline for building and deploying Postfix application'
+    project-type: pipeline
+    pipeline-scm:
+      scm:
+        - git:
+            url: http://gitlab.example.com/gitops/postfix-app.git
+            credentials-id: gitlab-credentials
+            branches:
+              - '*/main'
+            script-path: Jenkinsfile
+    triggers:
+      - gitlab:
+          trigger-on-push: true
+          trigger-on-merge-request: true
+          trigger-open-merge-request-push: 'never'
+          ci-skip: true
+          include-branches:
+            - main
+            - 'feature/*'
+            - 'release/*'
+          secret-token: 'your-webhook-secret'
+    publishers:
+      - email:
+          recipients: admin@example.com
+      - junit:
+          results: '**/test-reports/*.xml'
+      - archive:
+          artifacts: 'target/*.jar, target/*.war'
+          allow-empty: true
+    properties:
+      - build-discarder:
+          days-to-keep: 30
+          num-to-keep: 10
+      - parameters:
+          - string:
+              name: ENVIRONMENT
+              default: 'development'
+              description: 'Target environment for deployment'
+            

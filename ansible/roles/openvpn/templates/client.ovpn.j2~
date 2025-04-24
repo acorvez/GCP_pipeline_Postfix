@@ -1,0 +1,28 @@
+client
+dev tun
+proto udp
+remote {{ ansible_host }} 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+cipher AES-256-CBC
+verb 3
+
+<ca>
+{{ lookup('file', '/etc/openvpn/easyrsa/pki/ca.crt') }}
+</ca>
+
+<cert>
+{{ lookup('file', '/etc/openvpn/easyrsa/pki/issued/client.crt') }}
+</cert>
+
+<key>
+{{ lookup('file', '/etc/openvpn/easyrsa/pki/private/client.key') }}
+</key>
+
+<tls-auth>
+{{ lookup('file', '/etc/openvpn/server/ta.key') }}
+</tls-auth>
+key-direction 1

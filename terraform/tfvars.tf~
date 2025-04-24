@@ -1,0 +1,5 @@
+project_id        = "your-gcp-project-id"
+region            = "europe-west1"
+zone              = "europe-west1-b"
+ssh_user          = "adrien"
+ssh_pub_key_file  = "~/.ssh/id_rsa.pub"

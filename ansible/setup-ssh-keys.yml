@@ -1,0 +1,22 @@
+---
+- hosts: jenkins
+  become: true
+  tasks:
+    - name: Generate SSH key on Jenkins
+      user:
+        name: admin
+        generate_ssh_key: yes
+        ssh_key_bits: 2048
+      register: jenkins_ssh_key
+
+    - name: Get Jenkins public key
+      slurp:
+        src: /home/admin/.ssh/id_rsa.pub
+      register: jenkins_public_key
+
+    - name: Add Jenkins public key to GitLab authorized_keys
+      authorized_key:
+        user: admin
+        key: "{{ jenkins_public_key.content | b64decode }}"
+        state: present
+      delegate_to: gitlab
