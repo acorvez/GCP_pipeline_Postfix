@@ -1,1 +1,3 @@
 vpn/
+.terraform/
+.terraform.lock.hcl
